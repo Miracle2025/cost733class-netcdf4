@@ -30,7 +30,7 @@ read the wrong data. This fork links the system library and fixes all six.
 ```bash
 sudo apt install build-essential gfortran autoconf automake \
                  libnetcdf-dev libnetcdff-dev
-git clone <this-repo> && cd cost733class
+git clone https://github.com/Miracle2025/cost733class-netcdf4.git cost733class && cd cost733class
 autoreconf -fi && ./configure && make -j4
 ./src/cost733class          # prints usage
 ```
