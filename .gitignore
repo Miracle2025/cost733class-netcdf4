@@ -1,0 +1,16 @@
+# build artifacts
+*.o
+*.mod
+src/cost733class
+Makefile
+config.status
+config.log
+config.cache
+autom4te.cache/
+.deps/
+.dirstamp
+
+# validation outputs
+testout/
+# editor / autoreconf backups
+*~

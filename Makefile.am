@@ -1,19 +1,3 @@
-SUBDIRS =
-
-if NETCDF
-NCDIR = netcdf-4.0.1
-SUBDIRS += $(NCDIR)
-endif
-
-if GRIB
-GRDIR = grib_api-1.9.18
-SUBDIRS += $(GRDIR)
-endif
-
-if OPENGL
-GLDIR = f03gl
-SUBDIRS += $(GLDIR)
-endif
-
-SUBDIRS += src
-
+# This fork links the system netCDF-Fortran library instead of building
+# the vendored netcdf-4.0.1, so there are no third-party subdirectories.
+SUBDIRS = src

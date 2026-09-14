@@ -4,37 +4,22 @@ cost733class_SOURCES = globvar.f90
 cost733class_LDADD =
 AM_FCFLAGS =
 
-if OPENGL
-AM_FCFLAGS += -fno-underscoring -I$(top_srcdir)/f03gl -L$(top_srcdir)/f03gl
-cost733class_LDADD += -lX11 -ljpeg -lglut -lGLU -lGL
-cost733class_LDADD += $(top_srcdir)/f03gl/libf03gl.a 
-cost733class_SOURCES += GLUT_fonts.c opengl.f90
-else
+# This fork dropped the vendored f03gl/grib_api trees, so the OpenGL
+# viewer and GRIB input are always compiled out via the dummy sources.
 cost733class_SOURCES += opengl_dummy.f90
-endif
+cost733class_SOURCES += gribcheck-dummy.f90
+cost733class_SOURCES += gribinput-dummy.f90
 
 if NETCDF
-cost733class_SOURCES += netcdfcheck.f90 
-cost733class_SOURCES += netcdfinput.f90 
-cost733class_SOURCES += writenetcdf.f90 
-cost733class_LDADD += $(top_srcdir)/netcdf-4.0.1/libsrc/.libs/libnetcdf.a 
-AM_FCFLAGS += -I$(top_srcdir)/netcdf-4.0.1/f90
+cost733class_SOURCES += netcdfcheck.f90
+cost733class_SOURCES += netcdfinput.f90
+cost733class_SOURCES += writenetcdf.f90
+cost733class_LDADD += $(NETCDF_LIBS)
+AM_FCFLAGS += $(NETCDF_FFLAGS)
 else
-cost733class_SOURCES += netcdfcheck-dummy.f90 
-cost733class_SOURCES += netcdfinput-dummy.f90 
-cost733class_SOURCES += writenetcdf-dummy.f90 
-endif
-
-if GRIB
-cost733class_SOURCES += gribcheck.f90 
-cost733class_SOURCES += gribinput.f90 
-cost733class_LDADD += $(top_srcdir)/grib_api-1.9.18/fortran/.libs/libgrib_api_f90.a
-cost733class_LDADD += $(top_srcdir)/grib_api-1.9.18/src/.libs/libgrib_api.a
-cost733class_LDADD += -lm -ljasper
-AM_FCFLAGS += -I$(top_srcdir)/grib_api-1.9.18/fortran
-else
-cost733class_SOURCES += gribcheck-dummy.f90 
-cost733class_SOURCES += gribinput-dummy.f90 
+cost733class_SOURCES += netcdfcheck-dummy.f90
+cost733class_SOURCES += netcdfinput-dummy.f90
+cost733class_SOURCES += writenetcdf-dummy.f90
 endif
 
 
