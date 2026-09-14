@@ -180,9 +180,13 @@ subroutine selectgrid(lonchar,latchar,slochar,slachar,verbose, &
 
   latmod=0 ! from south to north
   if(diflat<0)latmod=1 ! first is most northerly, last is most southerly
-  if(latmod==1)then 
+  if(latmod==1)then
      fy = ((maxlat-smaxla)/dabs(diflat))+1
      ly = ((maxlat-sminla)/dabs(diflat))+1
+  else
+     ! ascending latitude storage: index runs from the southernmost row
+     fy = ((sminla-minlat)/dabs(diflat))+1
+     ly = ((smaxla-minlat)/dabs(diflat))+1
   endif
   dy = dabs(sdifla)/dabs(diflat)
   ny=0

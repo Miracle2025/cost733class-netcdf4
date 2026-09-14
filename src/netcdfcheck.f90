@@ -57,6 +57,10 @@ subroutine netcdfcheck(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
 
   integer :: nx,fx1,nx1,dx,fx2,nx2,ny,fy,dy
 
+  real(kind=8) :: tfactor,epochhours
+  logical :: cfok
+  logical :: lon_differs,lat_differs
+
   data xchar/"NF90_BYTE", "NF90_CHAR", "NF90_SHORT", "NF90_INT", "NF90_FLOAT", "NF90_DOUBLE"/
   offset=0.D0
   scale=1.D0
@@ -160,7 +164,8 @@ subroutine netcdfcheck(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
      ! GET VARIDs
      do p=1,nprm
         call nf90check( nf90_Inquire_Variable(ncid, p,vname,xtype,vndim,dimids,vnatt))
-        if(trim(vname)=="time")then
+        if(trim(vname)=="time".or.trim(vname)=="valid_time".or. &
+             & trim(vname)=="forecast_reference_time")then
            timeid=p
         endif
         if(trim(vname)=="lon".or.trim(vname)=="longitude")then
@@ -191,8 +196,10 @@ subroutine netcdfcheck(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
            nny=dimlen(dim)
            !latid=dim
         endif
-        if(trim(dimname(dim))=="level".or.trim(dimname(dim))=="lev")nnz=dimlen(dim)
-        if(trim(dimname(dim))=="time")then
+        if(trim(dimname(dim))=="level".or.trim(dimname(dim))=="lev".or. &
+             & trim(dimname(dim))=="pressure_level".or.trim(dimname(dim))=="plev")nnz=dimlen(dim)
+        if(trim(dimname(dim))=="time".or.trim(dimname(dim))=="valid_time".or. &
+             & trim(dimname(dim))=="forecast_reference_time")then
            nnt=dimlen(dim)
            !timeid=dim
         endif
@@ -208,7 +215,11 @@ subroutine netcdfcheck(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
 
      diftime=0
 
-     call nf90check( NF90_INQ_VARID(ncid,"time",timeid) )
+     ! the time coordinate may also be called valid_time (new CDS requests)
+     status = NF90_INQ_VARID(ncid,"time",timeid)
+     if(status/=nf90_noerr) status = NF90_INQ_VARID(ncid,"valid_time",timeid)
+     if(status/=nf90_noerr) status = NF90_INQ_VARID(ncid,"forecast_reference_time",timeid)
+     call nf90check(status)
      call nf90check( nf90_Inquire_Variable(ncid, timeid,vname,xtype,vndim,dimids,vnatt))
      if(VERBOSE>4)then
         write(*,*)
@@ -337,6 +348,16 @@ subroutine netcdfcheck(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
         if(VERBOSE>4)write(*,"(a)")" done!"
      endif
 
+     ! convert raw time values to the internal "hours since 1900-01-01"
+     ! clock using the CF units string (seconds/minutes/hours/days since
+     ! any calendar epoch, including the three legacy literals)
+     call cf_time_factor(trim(timeunit),tfactor,epochhours,cfok)
+     if(cfok)then
+        do i=1,nnt
+           time(i)=nint(real(time(i),8)*tfactor+epochhours)
+        enddo
+     endif
+
      if(nnt>1)diftime=time(2)-time(1)
      if(VERBOSE>4)write(*,*)" diftime =",diftime
      if(num==fnum)then
@@ -419,6 +440,28 @@ subroutine netcdfcheck(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
 
   ! lon/lat
   if(VERBOSE>4)write(*,*)
+
+  ! ------------------------------------------------------------------
+  ! If the requested grid (@lon/@lat in the -dat specification) differs
+  ! from the actual file extent, promote it to the SUBGRID selection.
+  ! Upstream silently replaced @lon/@lat with the file extent, so a crop
+  ! request was ignored and the FULL domain was read without warning.
+  ! ------------------------------------------------------------------
+  if(trim(slochar_p)=="unknown".and.trim(lonchar_p)/="unknown")then
+     call gridchar_differs(lonchar_p,milo,malo,dilo,lon_differs)
+     if(lon_differs)then
+        if(VERBOSE>1)write(*,"(a)")" NOTE: @lon differs from file extent -> used as subgrid selection (equivalent to @slo)."
+        slochar_p=trim(lonchar_p)
+     endif
+  endif
+  if(trim(slachar_p)=="unknown".and.trim(latchar_p)/="unknown")then
+     call gridchar_differs(latchar_p,mila,mala,dila,lat_differs)
+     if(lat_differs)then
+        if(VERBOSE>1)write(*,"(a)")" NOTE: @lat differs from file extent -> used as subgrid selection (equivalent to @sla)."
+        slachar_p=trim(latchar_p)
+     endif
+  endif
+
   write(lonchar_p,'(1f10.4,":",1f10.4,":",1f10.4)')milo,malo,dilo
   if(VERBOSE>4)write(*,*)" lonchar: "//trim(lonchar_p)
   write(latchar_p,'(1f10.4,":",1f10.4,":",1f10.4)')mila,mala,dila
@@ -487,59 +530,25 @@ subroutine netcdfcheck(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
 !  endif
 
 
-  select case (trim(timeunit))
-     !   hours since 1-1-1 00:00:0.0
-  case ("hours since 1-1-1 00:00:0.0","hours since 1-01-01 00:00:00")
-     !write(*,*)trim(timeunit)//" ok!"
-     if(VERBOSE>5)write(*,*)
-     call date4htime(ftime,year,month,day,hour)
-     if(VERBOSE>5)write(*,*)"    ###  ",year,month,day,hour
-     write(fdtchar_p,'(1i4.4,":",1i2.2,":",1i2.2,":",1i2.2)')year,month,day,hour
-
-     call date4htime(ltime,year,month,day,hour)
-     if(VERBOSE>5)write(*,*)"    ###  ",year,month,day,hour
-     write(ldtchar_p,'(1i4.4,":",1i2.2,":",1i2.2,":",1i2.2)')year,month,day,hour
-
-     if(diftime<24)then
-        write(ddtchar_p,'(1i2.2,"h")')diftime
-     else
-        write(ddtchar_p,'(1i2.2,"d")')diftime/24
-     endif
-  case ("hours since 1800-1-1 00:00:0.0","hours since 1800-01-01 00:00:00")
-     if(VERBOSE>5)write(*,*)
-     call date4htime1800(ftime,year,month,day,hour)
-     if(VERBOSE>5)write(*,*)"    ###  ",year,month,day,hour
-     write(fdtchar_p,'(1i4.4,":",1i2.2,":",1i2.2,":",1i2.2)')year,month,day,hour
-
-     call date4htime1800(ltime,year,month,day,hour)
-     if(VERBOSE>5)write(*,*)"    ###  ",year,month,day,hour
-     write(ldtchar_p,'(1i4.4,":",1i2.2,":",1i2.2,":",1i2.2)')year,month,day,hour
-
-     if(diftime<24)then
-        write(ddtchar_p,'(1i2.2,"h")')diftime
-     else
-        write(ddtchar_p,'(1i2.2,"d")')diftime/24
-     endif
-  case ("hours since 1900-01-01 00:00:00")
-     if(VERBOSE>5)write(*,*)
-     call date4htime1900(ftime,year,month,day,hour)
-     if(VERBOSE>5)write(*,*)"    ###  ",year,month,day,hour
-     write(fdtchar_p,'(1i4.4,":",1i2.2,":",1i2.2,":",1i2.2)')year,month,day,hour
-
-     call date4htime1900(ltime,year,month,day,hour)
-     if(VERBOSE>5)write(*,*)"    ###  ",year,month,day,hour
-     write(ldtchar_p,'(1i4.4,":",1i2.2,":",1i2.2,":",1i2.2)')year,month,day,hour
-
-     if(diftime<24)then
-        write(ddtchar_p,'(1i2.2,"h")')diftime
-     else
-        write(ddtchar_p,'(1i2.2,"d")')diftime/24
-     endif
-  case default
-     !call help("ERROR: time unit in netcdf file not supported yet!")
-     write(*,"(/,a)")"ERROR: time unit in netcdf file not supported yet!"
+  ! all time values have been converted to integer hours since
+  ! 1900-01-01 above, so a single decoder covers every CF units string
+  if(.not.cfok)then
+     write(*,"(/,a)")"ERROR: time unit in netcdf file not supported yet: "//trim(timeunit)
      stop
-  end select
+  endif
+  call date4htime1900(ftime,year,month,day,hour)
+  if(VERBOSE>5)write(*,*)"    ###  ",year,month,day,hour
+  write(fdtchar_p,'(1i4.4,":",1i2.2,":",1i2.2,":",1i2.2)')year,month,day,hour
+
+  call date4htime1900(ltime,year,month,day,hour)
+  if(VERBOSE>5)write(*,*)"    ###  ",year,month,day,hour
+  write(ldtchar_p,'(1i4.4,":",1i2.2,":",1i2.2,":",1i2.2)')year,month,day,hour
+
+  if(diftime<24)then
+     write(ddtchar_p,'(1i2.2,"h")')diftime
+  else
+     write(ddtchar_p,'(1i2.2,"d")')diftime/24
+  endif
 
   if(VERBOSE>3)write(*,*)
 
@@ -553,6 +562,112 @@ contains
        write(*,*)"ERROR: netcdf:",trim(nf90_strerror(status));stop
     endif
   end subroutine nf90check
+
+  ! ------------------------------------------------------------------
+  ! compare a "min:max:step" grid specification with the file extent
+  ! ------------------------------------------------------------------
+  subroutine gridchar_differs(gridchar,fmin,fmax,fdif,differs)
+    implicit none
+    character(len=*), intent(in) :: gridchar
+    real(kind=8), intent(in) :: fmin,fmax,fdif
+    logical, intent(out) :: differs
+    character(len=200) :: s
+    real(kind=8) :: smin,smax,sdif
+    integer :: i,ios
+    differs=.true.
+    s=trim(gridchar)
+    do i=1,len_trim(s)
+       if(s(i:i)==":")s(i:i)=" "
+    enddo
+    read(s,*,iostat=ios)smin,smax,sdif
+    if(ios/=0)return
+    if(abs(smin-fmin)>1.D-4)return
+    if(abs(smax-fmax)>1.D-4)return
+    if(abs(abs(sdif)-abs(fdif))>1.D-4)return
+    differs=.false.
+  end subroutine gridchar_differs
+
+  ! ------------------------------------------------------------------
+  ! CF time support: parse a "<unit> since <epoch>" units string
+  ! ------------------------------------------------------------------
+  subroutine cf_time_factor(unitstr,factor,epochhours,ok)
+    ! returns factor (raw unit -> hours) and the epoch expressed in
+    ! hours since 1900-01-01 00:00; ok=false if the string is not a
+    ! supported CF time unit
+    implicit none
+    character(len=*), intent(in) :: unitstr
+    real(kind=8), intent(out) :: factor, epochhours
+    logical, intent(out) :: ok
+    character(len=200) :: s, uword, epo
+    integer :: i, isince, ios
+    integer :: ey, em, ed, eh, emi
+    real(kind=8) :: es
+    ok=.false.
+    factor=0.D0
+    epochhours=0.D0
+    s=adjustl(unitstr)
+    do i=1,len_trim(s)
+       if(s(i:i)>="A".and.s(i:i)<="Z")s(i:i)=char(iachar(s(i:i))+32)
+    enddo
+    isince=index(s," since ")
+    if(isince<=1)return
+    uword=s(1:isince-1)
+    epo=s(isince+7:len_trim(s))
+    select case (trim(uword))
+    case ("second","seconds","sec","secs","s")
+       factor=1.D0/3600.D0
+    case ("minute","minutes","min","mins")
+       factor=1.D0/60.D0
+    case ("hour","hours","hr","hrs","h")
+       factor=1.D0
+    case ("day","days","d")
+       factor=24.D0
+    case default
+       return
+    end select
+    ! tokenize the epoch: year month day [hour [minute [second]]]
+    do i=1,len_trim(epo)
+       if(epo(i:i)=="-".or.epo(i:i)==":".or.epo(i:i)=="T")epo(i:i)=" "
+    enddo
+    ey=0; em=0; ed=0; eh=0; emi=0; es=0.D0
+    read(epo,*,iostat=ios) ey,em,ed,eh,emi,es
+    if(ios/=0)then
+       es=0.D0
+       read(epo,*,iostat=ios) ey,em,ed,eh,emi
+       if(ios/=0)then
+          emi=0
+          read(epo,*,iostat=ios) ey,em,ed,eh
+          if(ios/=0)then
+             eh=0
+             read(epo,*,iostat=ios) ey,em,ed
+             if(ios/=0)return
+          endif
+       endif
+    endif
+    if(em<1.or.em>12.or.ed<1.or.ed>31)return
+    epochhours=(real(days_from_civil(ey,em,ed)-days_from_civil(1900,1,1),8))*24.D0 &
+         & +real(eh,8)+real(emi,8)/60.D0+es/3600.D0
+    ok=.true.
+  end subroutine cf_time_factor
+
+  pure integer function days_from_civil(y,m,d)
+    ! days since 1970-01-01 in the proleptic Gregorian calendar
+    ! (H. Hinnant's algorithm)
+    implicit none
+    integer, intent(in) :: y,m,d
+    integer :: yy,era,yoe,doy,doe
+    yy=y
+    if(m<=2)yy=yy-1
+    if(yy>=0)then
+       era=yy/400
+    else
+       era=(yy-399)/400
+    endif
+    yoe=yy-era*400
+    doy=(153*(m+merge(-3,9,m<=2))+2)/5+d-1
+    doe=yoe*365+yoe/4-yoe/100+doy
+    days_from_civil=era*146097+doe-719468
+  end function days_from_civil
 
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   subroutine date4hcount(htime,ysince,year,month,day,hour)

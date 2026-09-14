@@ -27,6 +27,10 @@ subroutine netcdfinput(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
   integer :: dim,obs,t,y,x
   integer :: start(4),count(4),stride(4)
   real(kind=8), allocatable :: d3dat(:,:,:),d4dat(:,:,:,:) !,testdat(:,:,:,:)
+  real(kind=8), allocatable :: f3(:,:,:),g3(:,:,:),f4(:,:,:,:),g4(:,:,:,:)
+  integer :: axlon,axlat,axlev,axtim
+  character(len=100) :: dname1
+  integer :: dl1
   integer :: timeid,lonid,latid,levid,varid
   integer :: xtype,vndim,dimids(4),vnatt,n
   character(len=11) :: xchar(6)
@@ -114,25 +118,28 @@ subroutine netcdfinput(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
            if(VERBOSE>3)write(*,"(2x,a,i9)")"varid "//trim(vname)//":",p
            varid=p
         endif
-        if(trim(vname)=="time")then
+        if(trim(vname)=="time".or.trim(vname)=="valid_time".or. &
+             & trim(vname)=="forecast_reference_time")then
            timeid=p
         endif
-        if(trim(vname)=="lon")then
+        if(trim(vname)=="lon".or.trim(vname)=="longitude")then
           lonid=p
         endif
-        if(trim(vname)=="lat")then
+        if(trim(vname)=="lat".or.trim(vname)=="latitude")then
           latid=p
         endif
-        if(trim(vname)=="level".or.trim(vname)=="lev")then
+        if(trim(vname)=="level".or.trim(vname)=="lev".or. &
+             & trim(vname)=="pressure_level".or.trim(vname)=="plev")then
           levid=p
         endif
      enddo
-     ! if still no varid take the one which is not lon, lat, ...
+     ! if still no varid take the one which is not a coordinate variable
      if(varid==0)then
         do p=1,nprm
            call nf90check( nf90_Inquire_Variable(ncid, p,vname,xtype,vndim,dimids,vnatt))
            select case (trim(vname))
-           case ("lon","lat","time","level","lev")
+           case ("lon","longitude","lat","latitude","time","valid_time", &
+                & "forecast_reference_time","level","lev","pressure_level","plev")
               cycle
            end select
            varid=p
@@ -182,22 +189,27 @@ subroutine netcdfinput(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
      ! GET DIMENSION ID'S AND DIMENSION LENGTHS
      allocate(dimid(ndim),dimname(ndim),dimlen(ndim))
      nnz=1
+     nnx=1
+     nny=1
+     nnt=1
      do dim=1,ndim
-        
+
         call nf90check( nf90_Inquire_Dimension(ncid, dim, dimname(dim), dimlen(dim)) )
         dimid(dim)=dim
         !if(dimname(dim)=="time")timeid=dim
         !write(*,*)dim,dimname(dim),dimid(dim),dimlen(dim)
-        if(trim(dimname(dim))=="lon")then
+        if(trim(dimname(dim))=="lon".or.trim(dimname(dim))=="longitude")then
            nnx=dimlen(dim)
            !lonid=dim
         endif
-        if(trim(dimname(dim))=="lat")then
+        if(trim(dimname(dim))=="lat".or.trim(dimname(dim))=="latitude")then
            nny=dimlen(dim)
            !latid=dim
         endif
-        if(trim(dimname(dim))=="level".or.trim(dimname(dim))=="lev")nnz=dimlen(dim)
-        if(trim(dimname(dim))=="time")then
+        if(trim(dimname(dim))=="level".or.trim(dimname(dim))=="lev".or. &
+             & trim(dimname(dim))=="pressure_level".or.trim(dimname(dim))=="plev")nnz=dimlen(dim)
+        if(trim(dimname(dim))=="time".or.trim(dimname(dim))=="valid_time".or. &
+             & trim(dimname(dim))=="forecast_reference_time")then
            nnt=dimlen(dim)
            !timeid=dim
         endif
@@ -241,28 +253,83 @@ subroutine netcdfinput(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
      ! needs to know:
      ! nx,fx1,nx1,dx,fx2,nx2,ny,dy
 
+     ! ----------------------------------------------------------------
+     ! axis-generic read: CF producers (e.g. the CDS) may store the data
+     ! variable as (time,[lev,]lat,lon); locate each axis by DIMENSION
+     ! NAME instead of assuming (lon,lat,[lev,]time) storage order, then
+     ! reorder the slab to the internal (lon,lat,[lev,]time) layout
+     ! ----------------------------------------------------------------
+     call nf90check( nf90_Inquire_Variable(ncid, varid, vname, xtype, vndim, dimids, vnatt))
+     axlon=0
+     axlat=0
+     axlev=0
+     axtim=0
+     do p=1,vndim
+        call nf90check( nf90_Inquire_Dimension(ncid, dimids(p), dname1, dl1))
+        select case (trim(dname1))
+        case ("lon","longitude")
+           if(axlon==0)axlon=p
+        case ("lat","latitude")
+           if(axlat==0)axlat=p
+        case ("level","lev","pressure_level","plev")
+           if(axlev==0)axlev=p
+        case ("time","valid_time","forecast_reference_time")
+           if(axtim==0)axtim=p
+        end select
+     enddo
+     if(vndim/=3.and.vndim/=4)then
+        write(*,*)"ERROR: netcdfinput: data variable '"//trim(varchar)//"' must have 3 or 4 dimensions, has",vndim
+        stop
+     endif
+     if(vndim==3.and.(axlon==0.or.axlat==0.or.axtim==0.or.axlev/=0))then
+        write(*,*)"ERROR: netcdfinput: axes of variable '"//trim(varchar)//"' not recognised as (lon,lat,time):"
+        write(*,*)"       dimensions must be named lon/longitude, lat/latitude, time/valid_time."
+        stop
+     endif
+     if(vndim==4.and.(axlon==0.or.axlat==0.or.axlev==0.or.axtim==0))then
+        write(*,*)"ERROR: netcdfinput: axes of variable '"//trim(varchar)//"' not recognised as (lon,lat,lev,time):"
+        write(*,*)"       dimensions must be named lon/longitude, lat/latitude, level/pressure_level, time/valid_time."
+        stop
+     endif
+     if(VERBOSE>3)write(*,"(2x,a,4i3)")" axis positions (lon,lat,lev,time):",axlon,axlat,axlev,axtim
+
      ! READ BY ONE SINGLE CALL
-     if(ndim==3)allocate(d3dat(nx,ny,nnt))     
-     if(ndim==4)allocate(d4dat(nx,ny,1,nnt))
+     if(vndim==3)allocate(d3dat(nx,ny,nnt))
+     if(vndim==4)allocate(d4dat(nx,ny,1,nnt))
      !d4dat=-9
 
-     start(1)=fx1
-     count(1)=nx1
-     stride(1)=dx
+     do p=1,vndim
+        start(p)=1
+        count(p)=1
+        stride(p)=1
+     enddo
+     start(axlon)=fx1
+     count(axlon)=nx1
+     stride(axlon)=dx
+     start(axlat)=fy
+     count(axlat)=ny
+     stride(axlat)=dy
+     if(vndim==4)then
+        start(axlev)=sz
+        count(axlev)=1
+        stride(axlev)=1
+     endif
+     start(axtim)=1
+     count(axtim)=nnt
+     stride(axtim)=1
 
-     start(2)=fy
-     count(2)=ny
-     stride(2)=dy
-
-     if(ndim==3)then
-        start(3)=1
-        count(3)=nnt
-        stride(3)=1
-        call nf90check( NF90_GET_VAR (ncid,varid,d3dat(1:nx1,1:ny,1:nnt),start(1:3),count(1:3),stride(1:3)) )
+     if(vndim==3)then
+        allocate(f3(count(1),count(2),count(3)))
+        call nf90check( NF90_GET_VAR (ncid,varid,f3,start(1:3),count(1:3),stride(1:3)) )
+        d3dat(1:nx1,1:ny,1:nnt)=reshape(f3,(/nx1,ny,nnt/),order=(/axlon,axlat,axtim/))
+        deallocate(f3)
         if(nx2>0)then
-           start(1)=fx2
-           count(1)=nx2
-           call nf90check( NF90_GET_VAR (ncid,varid,d3dat(nx1+1:nx,1:ny,1:nnt),start(1:3),count(1:3),stride(1:3)) )
+           start(axlon)=fx2
+           count(axlon)=nx2
+           allocate(g3(count(1),count(2),count(3)))
+           call nf90check( NF90_GET_VAR (ncid,varid,g3,start(1:3),count(1:3),stride(1:3)) )
+           d3dat(nx1+1:nx,1:ny,1:nnt)=reshape(g3,(/nx2,ny,nnt/),order=(/axlon,axlat,axtim/))
+           deallocate(g3)
         endif
 
         if(DIFLAT(par)>0.D0)then
@@ -285,32 +352,18 @@ subroutine netcdfinput(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
         !     & maxval(RAWDAT(FIRSTVARPAR(par):LASTVARPAR(par),1:nnt))
      else
 
-        start(3)=sz
-        count(3)=1
-        stride(3)=1
-        start(4)=1
-        count(4)=nnt
-        stride(4)=1
-        !write(*,"(a,4i6)")"start  :",start
-        !write(*,"(a,4i6)")"count  :",count
-        !write(*,"(a,4i6)")"stride :",stride
-        call nf90check( NF90_GET_VAR (ncid,varid,d4dat(1:nx1,1:ny,1:1,1:nnt),start(1:4),count(1:4),stride(1:4)) )
+        allocate(f4(count(1),count(2),count(3),count(4)))
+        call nf90check( NF90_GET_VAR (ncid,varid,f4,start(1:4),count(1:4),stride(1:4)) )
+        d4dat(1:nx1,1:ny,1:1,1:nnt)=reshape(f4,(/nx1,ny,1,nnt/),order=(/axlon,axlat,axlev,axtim/))
+        deallocate(f4)
         if(nx2>0)then
-           start(1)=fx2
-           count(1)=nx2
-!!$           write(*,"(a,4i6)")"start  :",start
-!!$           write(*,"(a,4i6)")"count  :",count
-!!$           write(*,"(a,4i6)")"stride :",stride
-!!$           allocate(testdat(count(1),count(2),count(3),count(4))) 
-           call nf90check( NF90_GET_VAR (ncid,varid,d4dat(nx1+1:nx,1:ny,1:1,1:nnt),start(1:4),count(1:4),stride(1:4)) )
-!!$           call nf90check( NF90_GET_VAR (ncid,varid,testdat,start(1:4),count(1:4),stride(1:4)) )
+           start(axlon)=fx2
+           count(axlon)=nx2
+           allocate(g4(count(1),count(2),count(3),count(4)))
+           call nf90check( NF90_GET_VAR (ncid,varid,g4,start(1:4),count(1:4),stride(1:4)) )
+           d4dat(nx1+1:nx,1:ny,1:1,1:nnt)=reshape(g4,(/nx2,ny,1,nnt/),order=(/axlon,axlat,axlev,axtim/))
+           deallocate(g4)
         endif
-
-        !do t=1,1
-        !   do y=1,ny
-        !      write(*,"(999f10.1)")(d4dat(1:nx,y,1,t)*scale)+offset
-        !   enddo
-        !enddo
 
         if(DIFLAT(par)>0.D0)then
            do t=1,nnt
@@ -337,8 +390,8 @@ subroutine netcdfinput(par,datchar_p,lonchar_p,latchar_p,fdtchar_p,ldtchar_p,ddt
      endif
 
      ! CLOSE
-     if(ndim==4)deallocate(d4dat)
-     if(ndim==3)deallocate(d3dat)
+     if(vndim==4)deallocate(d4dat)
+     if(vndim==3)deallocate(d3dat)
      if(allocated(level))deallocate(level)
      deallocate(dimid,dimname,dimlen)
      call nf90check( NF90_CLOSE(ncid) )
